@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# blog-exporter
-=======
 # Blog Crawler & Exporter (Next.js)
 
 Enter a website URL, crawl its blog posts (title, featured image, body with images, description, date, author, tags) and download them in a format your platform can import: **WordPress, Wix, Squarespace, Shopify, Webflow, Ghost**, or generic **CSV / JSON**.
@@ -106,4 +103,3 @@ lib/
 - **"No posts found":** the site may block automated requests or render posts with JavaScript only. Try the blog page URL, such as `https://site.com/blog`.
 - **Images missing in the preview:** some sites block hotlinking. The exported file still contains the image URLs.
 - **`npm install` fails:** update Node to 18.18 or newer.
->>>>>>> 184f500 (Blog uPdate)
