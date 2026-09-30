@@ -36,7 +36,8 @@ async function fetchTarget(target, optimize) {
       redirect: 'manual',
       headers: {
         'user-agent': UA,
-        accept: 'text/html,application/xhtml+xml,application/xml,application/rss+xml,application/json,image/avif,image/webp,image/*,*/*;q=0.8',
+        // Plain browser Accept header: some builders (e.g. Duda) serve internal JSON page data instead of HTML if application/json is listed.
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'accept-language': 'en-US,en;q=0.9',
       },
       signal: AbortSignal.timeout(18000),

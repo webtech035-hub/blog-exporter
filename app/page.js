@@ -36,7 +36,7 @@ export default function Home() {
     const host = new URL(posts[0].url).host.replace(/[^a-z0-9.-]/gi, '');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([buildFile(k, posts, blog)], { type: f.mime + ';charset=utf-8' }));
-    a.download = `${host}-${k}.${f.ext}`;
+    a.download = `${host}-${f.name || k}.${f.ext}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
