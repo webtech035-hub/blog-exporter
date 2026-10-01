@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { crawl, words } from '../lib/crawler';
+import { crawl, clipToPost, words } from '../lib/crawler';
+import { bookmarkletHref, CLIP_CHANNEL, CLIP_STORE } from '../lib/clipper';
 import { FORMATS, buildFile } from '../lib/exporters';
 
 // Presentation details for each export format (FORMATS holds the file logic).
@@ -18,6 +19,14 @@ const PLATFORMS = {
 
 // Brand mark CSS vars; black brands (ink) flip to white in dark mode.
 const markVars = (pl) => ({ '--c': pl.color, '--mt': pl.ink ? 'var(--ink-tx)' : '#fff' });
+
+// Public address importers download images from (see /api/image). A local dev server
+// is not reachable by WordPress / Wix, so exports made locally use the live site.
+const LIVE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://blog-exporter.vercel.app';
+function imageHost() {
+  const { origin, hostname } = window.location;
+  return /^(localhost|127\.|\[::1\]|192\.168\.|10\.)/.test(hostname) || hostname.endsWith('.local') ? LIVE_URL : origin;
+}
 
 const STEPS = ['Finding posts', 'Reading posts', 'Loading details', 'Ready'];
 
@@ -56,6 +65,9 @@ const Icon = {
   sun: <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4" /></svg>,
   moon: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>,
   monitor: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></svg>,
+  shield: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z" /><path d="M9 12l2 2 4-4" /></svg>,
+  bookmark: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12v17l-6-4-6 4z" /></svg>,
+  external: <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>,
   clock: <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>,
 };
 
@@ -74,6 +86,12 @@ export default function Home() {
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const resultsRef = useRef(null);
+  // Bot-protected sites: posts are saved one by one with the bookmark (lib/clipper.js).
+  const [blocked, setBlocked] = useState('');
+  const [bmHref, setBmHref] = useState('');
+  const [source, setSource] = useState('crawl');
+  const sourceRef = useRef('crawl');
+  const bmRef = useRef(null);
   // 'system' follows the OS setting via CSS; 'light' / 'dark' are saved overrides.
   const [theme, setTheme] = useState('');
 
@@ -91,6 +109,56 @@ export default function Home() {
     if (next === 'system') delete root.dataset.theme;
     else root.dataset.theme = next;
     setTheme(next);
+  }
+
+  function showClips(list, announce) {
+    const clipped = list.map(clipToPost).filter((p) => p.title);
+    if (!clipped.length) return;
+    sourceRef.current = 'clip';
+    setSource('clip');
+    setPosts(clipped);
+    setDone(true);
+    setStatus({ t: `${clipped.length} post${clipped.length === 1 ? '' : 's'} saved manually` });
+    if (announce) notify(`Saved: ${announce}`);
+  }
+
+  function readClips() {
+    try { return JSON.parse(localStorage.getItem(CLIP_STORE) || '[]'); } catch { return []; }
+  }
+
+  // Bookmark link + posts saved earlier + live updates from the /clip popup.
+  useEffect(() => {
+    setBmHref(bookmarkletHref(window.location.origin));
+    const saved = readClips();
+    if (saved.length) showClips(saved);
+    let ch;
+    const onClip = (post) => {
+      const list = readClips();
+      showClips(list.some((x) => x.url === post.url) ? list : list.concat(post), post.title);
+    };
+    try {
+      ch = new BroadcastChannel(CLIP_CHANNEL);
+      ch.onmessage = (e) => e.data && e.data.type === 'clip' && onClip(e.data.post);
+    } catch { /* no BroadcastChannel */ }
+    const onStorage = (e) => { if (e.key === CLIP_STORE && !ch) showClips(readClips()); };
+    window.addEventListener('storage', onStorage);
+    return () => { if (ch) ch.close(); window.removeEventListener('storage', onStorage); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // React refuses javascript: URLs in JSX, so the bookmark's href is set directly.
+  useEffect(() => {
+    if (bmRef.current && bmHref) bmRef.current.setAttribute('href', bmHref);
+  }, [bmHref, blocked]);
+
+  function clearClips() {
+    try { localStorage.removeItem(CLIP_STORE); } catch { /* ignore */ }
+    sourceRef.current = 'crawl';
+    setSource('crawl');
+    setPosts([]);
+    setDone(false);
+    setStatus({ t: '' });
+    notify('Saved posts cleared');
   }
 
   const stage = stageOf(status.t, busy, done);
@@ -122,6 +190,9 @@ export default function Home() {
     setFilter('');
     setActive('');
     setSkipped(0);
+    setBlocked('');
+    sourceRef.current = 'crawl';
+    setSource('crawl');
     setStatus({ t: 'Looking for posts…' });
     try {
       const n = Math.max(1, Math.min(200, +max || 20));
@@ -137,6 +208,7 @@ export default function Home() {
       }
     } catch (err) {
       setStatus({ t: err.message, err: true });
+      if (err.code === 'BOT_PROTECTED') setBlocked(url);
     }
     setBusy(false);
   }
@@ -153,7 +225,7 @@ export default function Home() {
     const host = new URL(selected[0].url).host.replace(/[^a-z0-9.-]/gi, '');
     const name = `${host}-${f.name || k}.${f.ext}`;
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([buildFile(k, selected, blog)], { type: f.mime + ';charset=utf-8' }));
+    a.href = URL.createObjectURL(new Blob([buildFile(k, selected, blog, { imageHost: imageHost() })], { type: f.mime + ';charset=utf-8' }));
     a.download = name;
     document.body.appendChild(a);
     a.click();
@@ -212,8 +284,13 @@ export default function Home() {
               {busy ? <><span className="spin" />Crawling</> : <>Crawl blog<span className="ico">{Icon.arrow}</span></>}
             </button>
           </form>
+          {!blocked && !busy && (
+            <button type="button" className="manual" onClick={() => setBlocked(url.trim() || 'manual')}>
+              <span className="ico">{Icon.shield}</span>Site blocked or not loading? Save posts manually
+            </button>
+          )}
 
-          {(busy || done || status.err) && (
+          {(busy || done || status.err) && !(blocked && status.err) && (
             <div className={'progress' + (status.err ? ' err' : '') + (done ? ' done' : '')} role="status" aria-live="polite">
               <ol className="steps">
                 {STEPS.map((s, i) => (
@@ -231,6 +308,62 @@ export default function Home() {
             </div>
           )}
         </section>
+
+        {blocked && (
+          <section className="protect" aria-labelledby="protect-title">
+            <div className="phead">
+              <div className="ptitle">
+                <span className="shield">{Icon.shield}</span>
+                <div>
+                  <h2 id="protect-title">{blocked === 'manual' ? 'Save posts manually' : 'This website has bot protection'}</h2>
+                  <p className="muted">
+                    {blocked === 'manual'
+                      ? 'Open the blog in your browser and save each post with one click.'
+                      : 'It asks visitors to prove they’re human, so it can’t be crawled automatically. Verify yourself, then save each post with one click.'}
+                  </p>
+                </div>
+              </div>
+              <button type="button" className="ghost" onClick={() => setBlocked('')}>Close</button>
+            </div>
+            <ol className="psteps">
+              <li style={{ '--d': '0ms' }}>
+                <span className="num">1</span>
+                <div>
+                  <b>Open the website and verify you’re human</b>
+                  <p>Complete any “I’m not a robot” check on the site, then keep that tab open.</p>
+                  {blocked !== 'manual' && (
+                    <a className="btn" href={/^https?:/i.test(blocked) ? blocked : 'https://' + blocked} target="_blank" rel="noreferrer">
+                      Open website & verify<span className="ico">{Icon.external}</span>
+                    </a>
+                  )}
+                </div>
+              </li>
+              <li style={{ '--d': '80ms' }}>
+                <span className="num">2</span>
+                <div>
+                  <b>Add the Save button to your bookmarks bar</b>
+                  <p>Drag this button onto your bookmarks bar (one time only). Can’t see the bar? Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd>.</p>
+                  <a
+                    ref={bmRef} className="bm" draggable="true"
+                    onClick={(e) => { e.preventDefault(); notify('Drag this button to your bookmarks bar, then click it on a blog post'); }}
+                  >
+                    <span className="ico">{Icon.bookmark}</span>Save to Blog Exporter
+                  </a>
+                </div>
+              </li>
+              <li style={{ '--d': '160ms' }}>
+                <span className="num">3</span>
+                <div>
+                  <b>Open each blog post and click “Save to Blog Exporter”</b>
+                  <p>Posts appear here instantly, with images. When you’re done, choose your export platform below.</p>
+                  <span className={'saved' + (source === 'clip' && posts.length ? ' on' : '')}>
+                    {source === 'clip' && posts.length ? `${posts.length} post${posts.length === 1 ? '' : 's'} saved` : 'Waiting for your first post…'}
+                  </span>
+                </div>
+              </li>
+            </ol>
+          </section>
+        )}
 
         {!showResults && !busy && !status.err && (
           <section className="how">
@@ -318,6 +451,7 @@ export default function Home() {
                   <div className="tools">
                     <label className="filter"><span className="ico">{Icon.search}</span><input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter posts" aria-label="Filter posts" /></label>
                     <button className="ghost" onClick={() => setExcluded(allOn ? new Set(posts.map((p) => p.url)) : new Set())}>{allOn ? 'Select none' : 'Select all'}</button>
+                    {source === 'clip' && <button className="ghost danger" onClick={clearClips}>Clear saved</button>}
                   </div>
                 )}
               </div>
